@@ -2,6 +2,7 @@ package route
 
 import (
 	"crypto/ecdsa"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -22,6 +23,23 @@ func NewManagementRoute(management *service.Management) *ManagementRoute {
 	return &ManagementRoute{
 		management: management,
 	}
+}
+
+// isLoopbackRequest reports whether a request genuinely originated from the
+// local host. Unlike c.RealIP(), the address returned by ExtractIPDirect()
+// comes from the TCP socket peer — it cannot be spoofed with
+// X-Forwarded-For / X-Real-IP headers.
+//
+// Why loopback trust exists: the internal CasaOS services (casaos main,
+// user-service, app-management) MUST register their routes with the gateway
+// during bootstrap — before any user exists and therefore before any JWT can
+// be issued. The management server is bound to loopback only, so a
+// verified-loopback peer is one of these trusted local services. Anything
+// else (e.g. a request reaching the management API through some other proxy
+// path) still requires a valid JWT.
+func isLoopbackRequest(c echo.Context) bool {
+	ip := net.ParseIP(echo.ExtractIPDirect()(c.Request()))
+	return ip != nil && ip.IsLoopback()
 }
 
 func (m *ManagementRoute) GetRoute() http.Handler {
@@ -71,29 +89,28 @@ func (m *ManagementRoute) buildV1Group(e *echo.Echo) {
 func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 	v1GatewayGroup := v1Group.Group("/gateway")
 
-		// SECURITY: all management routes require authentication — including the
-		// two read-only GET endpoints that previously exposed the full route
-		// table and internal port without any check.
-		v1GatewayGroup.Use(echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
-			Skipper: func(c echo.Context) bool {
-				return false // SECURITY: always require auth
+	// SECURITY: management routes require authentication. The sole
+	// exception is a verified-loopback caller (see isLoopbackRequest) —
+	// the internal CasaOS services must register their routes during
+	// bootstrap, before any user/JWT exists.
+	v1GatewayGroup.Use(echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
+		Skipper: isLoopbackRequest,
+		ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
+			valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
+			if err != nil || !valid {
+				return nil, echo.ErrUnauthorized
+			}
+			c.Request().Header.Set("user_id", strconv.Itoa(claims.ID))
+			return claims, nil
+		},
+		TokenLookupFuncs: []echo_middleware.ValuesExtractor{
+			func(c echo.Context) ([]string, error) {
+				return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
 			},
-			ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
-				valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
-				if err != nil || !valid {
-					return nil, echo.ErrUnauthorized
-				}
-				c.Request().Header.Set("user_id", strconv.Itoa(claims.ID))
-				return claims, nil
-			},
-			TokenLookupFuncs: []echo_middleware.ValuesExtractor{
-				func(c echo.Context) ([]string, error) {
-					return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
-				},
-			},
-		}))
-		{
-			v1GatewayGroup.GET("/routes", func(ctx echo.Context) error {
+		},
+	}))
+	{
+		v1GatewayGroup.GET("/routes", func(ctx echo.Context) error {
 			return ctx.JSON(http.StatusOK, m.management.GetRoutes())
 		})
 
@@ -118,10 +135,9 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 				return ctx.NoContent(http.StatusCreated)
 			},
 			echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
-				// SECURITY: always require a valid JWT — no localhost/loopback skipper.
-				Skipper: func(c echo.Context) bool {
-					return false
-				},
+				// SECURITY: require a valid JWT unless the caller is
+				// verified-loopback (bootstrap; see isLoopbackRequest).
+				Skipper: isLoopbackRequest,
 				ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
 					valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
 					if err != nil || !valid {
@@ -169,10 +185,9 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 				})
 			},
 			echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
-				// SECURITY: always require a valid JWT — no localhost/loopback skipper.
-				Skipper: func(c echo.Context) bool {
-					return false
-				},
+				// SECURITY: require a valid JWT unless the caller is
+				// verified-loopback (bootstrap; see isLoopbackRequest).
+				Skipper: isLoopbackRequest,
 				ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
 					valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
 					if err != nil || !valid {
