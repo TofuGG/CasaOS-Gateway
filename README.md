@@ -8,6 +8,16 @@ This gateway service comes with a simple management API for other services to re
 
 > As a best practice, a service behind this gateway should bind to localhost (`127.0.0.1` for IPv4, `::1` for IPv6) ONLY, so no external network access is allowed.
 
+## Security Hardening
+
+| # | Fix |
+|---|-----|
+| 12 | **JWT skippers removed** — `POST /v1/gateway/routes` and `PUT /v1/gateway/port` (and the previously unauthenticated `GET /routes` / `GET /port`) now all require a valid bearer token; no loopback bypass |
+| 12 | **IP extractor hardened** — `echo.ExtractIPDirect()`; client-supplied `X-Forwarded-For` / `X-Real-IP` headers are never trusted for address determination |
+| 12 | **CORS tightened** — origins restricted to localhost/`127.0.0.1`, `AllowCredentials: false` |
+
+> A service behind this gateway should keep binding to localhost only, as documented above. See [Configuration](#configuration).
+
 ## Configuration
 
 Upon launching, it will search for `gateway.ini` file in the following order:

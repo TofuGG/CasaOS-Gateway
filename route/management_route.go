@@ -27,13 +27,23 @@ func NewManagementRoute(management *service.Management) *ManagementRoute {
 func (m *ManagementRoute) GetRoute() http.Handler {
 	e := echo.New()
 
+	// SECURITY: Never trust client-supplied X-Forwarded-For / X-Real-IP headers
+	// for remote-address determination (the JWT skipper previously relied on
+	// RealIP(), which echo derives from those headers).
+	e.IPExtractor = echo.ExtractIPDirect()
+
 	e.Use((echo_middleware.CORSWithConfig(echo_middleware.CORSConfig{
-		AllowOrigins:     []string{"*"},
+		AllowOrigins: []string{
+			"http://127.0.0.1:*",
+			"http://localhost:*",
+			"https://127.0.0.1:*",
+			"https://localhost:*",
+		},
 		AllowMethods:     []string{echo.POST, echo.GET, echo.OPTIONS, echo.PUT, echo.DELETE},
 		AllowHeaders:     []string{echo.HeaderAuthorization, echo.HeaderContentLength, echo.HeaderXCSRFToken, echo.HeaderContentType, echo.HeaderAccessControlAllowOrigin, echo.HeaderAccessControlAllowHeaders, echo.HeaderAccessControlAllowMethods, echo.HeaderConnection, echo.HeaderOrigin, echo.HeaderXRequestedWith},
 		ExposeHeaders:    []string{echo.HeaderContentLength, echo.HeaderAccessControlAllowOrigin, echo.HeaderAccessControlAllowHeaders},
 		MaxAge:           172800,
-		AllowCredentials: true,
+		AllowCredentials: false,
 	})))
 
 	e.Use(echo_middleware.Gzip())
@@ -61,9 +71,29 @@ func (m *ManagementRoute) buildV1Group(e *echo.Echo) {
 func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 	v1GatewayGroup := v1Group.Group("/gateway")
 
-	v1GatewayGroup.Use()
-	{
-		v1GatewayGroup.GET("/routes", func(ctx echo.Context) error {
+		// SECURITY: all management routes require authentication — including the
+		// two read-only GET endpoints that previously exposed the full route
+		// table and internal port without any check.
+		v1GatewayGroup.Use(echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
+			Skipper: func(c echo.Context) bool {
+				return false // SECURITY: always require auth
+			},
+			ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
+				valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
+				if err != nil || !valid {
+					return nil, echo.ErrUnauthorized
+				}
+				c.Request().Header.Set("user_id", strconv.Itoa(claims.ID))
+				return claims, nil
+			},
+			TokenLookupFuncs: []echo_middleware.ValuesExtractor{
+				func(c echo.Context) ([]string, error) {
+					return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
+				},
+			},
+		}))
+		{
+			v1GatewayGroup.GET("/routes", func(ctx echo.Context) error {
 			return ctx.JSON(http.StatusOK, m.management.GetRoutes())
 		})
 
@@ -88,9 +118,9 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 				return ctx.NoContent(http.StatusCreated)
 			},
 			echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
+				// SECURITY: always require a valid JWT — no localhost/loopback skipper.
 				Skipper: func(c echo.Context) bool {
-					return c.RealIP() == "::1" || c.RealIP() == "127.0.0.1"
-					// return true
+					return false
 				},
 				ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
 					valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
@@ -98,15 +128,11 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 						return nil, echo.ErrUnauthorized
 					}
 					c.Request().Header.Set("user_id", strconv.Itoa(claims.ID))
-
 					return claims, nil
 				},
 				TokenLookupFuncs: []echo_middleware.ValuesExtractor{
 					func(c echo.Context) ([]string, error) {
-						if len(c.Request().Header.Get(echo.HeaderAuthorization)) > 0 {
-							return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
-						}
-						return []string{c.QueryParam("token")}, nil
+						return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
 					},
 				},
 			}))
@@ -143,9 +169,9 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 				})
 			},
 			echo_middleware.JWTWithConfig(echo_middleware.JWTConfig{
+				// SECURITY: always require a valid JWT — no localhost/loopback skipper.
 				Skipper: func(c echo.Context) bool {
-					return c.RealIP() == "::1" || c.RealIP() == "127.0.0.1"
-					// return true
+					return false
 				},
 				ParseTokenFunc: func(token string, c echo.Context) (interface{}, error) {
 					valid, claims, err := jwt.Validate(token, func() (*ecdsa.PublicKey, error) { return external.GetPublicKey(m.management.State.GetRuntimePath()) })
@@ -158,10 +184,7 @@ func (m *ManagementRoute) buildV1RouteGroup(v1Group *echo.Group) {
 				},
 				TokenLookupFuncs: []echo_middleware.ValuesExtractor{
 					func(c echo.Context) ([]string, error) {
-						if len(c.Request().Header.Get(echo.HeaderAuthorization)) > 0 {
-							return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
-						}
-						return []string{c.QueryParam("token")}, nil
+						return []string{c.Request().Header.Get(echo.HeaderAuthorization)}, nil
 					},
 				},
 			}))
