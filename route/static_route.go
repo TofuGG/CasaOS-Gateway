@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -101,11 +102,35 @@ var indexRE = regexp.MustCompile(`/($|modules/[^\/]*/($|(index\.(html?|aspx?|cgi
 func (s *StaticRoute) GetRoute() http.Handler {
 	e := echo.New()
 
+	// SPA fallback: when a path doesn't match any file on disk, serve
+	// index.html so that client-side Vue Router routes (/launch, /login,
+	// deep links) work on direct navigation or browser refresh. Without
+	// this every non-root path returns 404.
+	indexFile := filepath.Join(s.state.GetWWWPath(), "index.html")
+	indexData, err := os.ReadFile(indexFile)
+	if err != nil {
+		indexData = nil // best-effort; no fallback if index.html missing
+	}
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if indexData != nil {
+			if he, ok := err.(*echo.HTTPError); ok && he.Code == http.StatusNotFound {
+				if c.Request().Method == http.MethodGet || c.Request().Method == http.MethodHead {
+					c.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
+					c.Response().Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+					c.Response().WriteHeader(http.StatusOK)
+					c.Response().Write(indexData)
+					return
+				}
+			}
+		}
+		e.DefaultHTTPErrorHandler(err, c)
+	}
+
 	e.Use(echo_middleware.Gzip())
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ctx echo.Context) error {
 			if indexRE.MatchString(ctx.Request().URL.Path) {
-				ctx.Response().Writer.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate,proxy-revalidate, max-age=0")
+				ctx.Response().Header().Set("Cache-Control", "no-cache, no-store, must-revalidate,proxy-revalidate, max-age=0")
 			}
 			return next(ctx)
 		}
