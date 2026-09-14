@@ -1,5 +1,10 @@
 # CasaOS-Gateway
 
+> ⚠️ **UNOFFICIAL FORK — NOT THE OFFICIAL RELEASE.** This is a **TofuGG** community
+> fork of the CasaOS Gateway, not affiliated with or endorsed by the official
+> CasaOS / IceWhaleTech team. It is provided **AS-IS** with **no warranty** and
+> **no official support**. **USE AT YOUR OWN RISK.**
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/IceWhaleTech/CasaOS-Gateway.svg)](https://pkg.go.dev/github.com/IceWhaleTech/CasaOS-Gateway) [![Go Report Card](https://goreportcard.com/badge/github.com/IceWhaleTech/CasaOS-Gateway)](https://goreportcard.com/report/github.com/IceWhaleTech/CasaOS-Gateway) [![goreleaser](https://github.com/IceWhaleTech/CasaOS-Gateway/actions/workflows/release.yml/badge.svg)](https://github.com/IceWhaleTech/CasaOS-Gateway/actions/workflows/release.yml) [![codecov](https://codecov.io/gh/IceWhaleTech/CasaOS-Gateway/branch/main/graph/badge.svg?token=5JIHXF1RJ4)](https://codecov.io/gh/IceWhaleTech/CasaOS-Gateway)
 
 CasaOS Gateway is a dynamic API gateway service that can be used to expose APIs from different other HTTP based services.
@@ -15,6 +20,8 @@ This gateway service comes with a simple management API for other services to re
 | 12 | **JWT skippers removed** — `POST /v1/gateway/routes` and `PUT /v1/gateway/port` (and the previously unauthenticated `GET /routes` / `GET /port`) now all require a valid bearer token; no loopback bypass |
 | 12 | **IP extractor hardened** — `echo.ExtractIPDirect()`; client-supplied `X-Forwarded-For` / `X-Real-IP` headers are never trusted for address determination |
 | 12 | **CORS tightened** — origins restricted to localhost/`127.0.0.1`, `AllowCredentials: false` |
+| 14 | **Verified-loopback bootstrap** — service bootstrap keeps a loopback-only bypass (tests the real socket peer IP, not spoofable `X-Forwarded-For`); everything else still requires JWT |
+| 14 | **SPA fallback** — unknown GET/HEAD paths serve `index.html` so Vue-Router deep links (`/launch`, `/login`, …) work on direct navigation instead of 404 |
 
 > A service behind this gateway should keep binding to localhost only, as documented above. See [Configuration](#configuration).
 
